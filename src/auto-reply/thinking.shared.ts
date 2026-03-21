@@ -70,7 +70,7 @@ export function supportsBuiltInXHighThinking(
   if (providerId === "github-copilot") {
     return GITHUB_COPILOT_XHIGH_MODEL_IDS.includes(modelId as never);
   }
-  return false;
+  return matchesExactOrPrefix(modelId, OPENAI_CODEX_XHIGH_MODEL_IDS);
 }
 
 // Normalize user-provided thinking level strings to the canonical enum.
