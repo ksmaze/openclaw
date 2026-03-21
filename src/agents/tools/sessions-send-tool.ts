@@ -89,19 +89,14 @@ export function createSessionsSendTool(opts?: {
       const sessionKeyParam = readStringParam(params, "sessionKey");
       const labelParam = readStringParam(params, "label")?.trim() || undefined;
       const labelAgentIdParam = readStringParam(params, "agentId")?.trim() || undefined;
-      if (sessionKeyParam && labelParam) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "error",
-          error: "Provide either sessionKey or label (not both).",
-        });
-      }
+      const preferredLabelParam = sessionKeyParam ? undefined : labelParam;
+      const preferredLabelAgentIdParam = sessionKeyParam ? undefined : labelAgentIdParam;
 
       let sessionKey = sessionKeyParam;
-      if (!sessionKey && labelParam) {
+      if (!sessionKey && preferredLabelParam) {
         const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
-        const requestedAgentId = labelAgentIdParam
-          ? normalizeAgentId(labelAgentIdParam)
+        const requestedAgentId = preferredLabelAgentIdParam
+          ? normalizeAgentId(preferredLabelAgentIdParam)
           : undefined;
 
         if (restrictToSpawned && requestedAgentId && requestedAgentId !== requesterAgentId) {
@@ -131,7 +126,7 @@ export function createSessionsSendTool(opts?: {
         }
 
         const resolveParams: Record<string, unknown> = {
-          label: labelParam,
+          label: preferredLabelParam,
           ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
           ...(restrictToSpawned ? { spawnedBy: effectiveRequesterKey } : {}),
         };
@@ -155,7 +150,7 @@ export function createSessionsSendTool(opts?: {
           return jsonResult({
             runId: crypto.randomUUID(),
             status: "error",
-            error: msg || `No session found with label: ${labelParam}`,
+            error: msg || `No session found with label: ${preferredLabelParam}`,
           });
         }
 
@@ -170,7 +165,7 @@ export function createSessionsSendTool(opts?: {
           return jsonResult({
             runId: crypto.randomUUID(),
             status: "error",
-            error: `No session found with label: ${labelParam}`,
+            error: `No session found with label: ${preferredLabelParam}`,
           });
         }
         sessionKey = resolvedKey;

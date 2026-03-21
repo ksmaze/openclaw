@@ -717,6 +717,60 @@ describe("sessions tools", () => {
     });
   });
 
+  it("sessions_send prefers sessionKey over label lookup", async () => {
+    const targetKey = "discord:group:target";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as {
+        method?: string;
+        params?: Record<string, unknown>;
+      };
+      if (request.method === "sessions.resolve") {
+        throw new Error("unexpected label lookup");
+      }
+      if (request.method === "agent") {
+        return { runId: "run-1", acceptedAt: 123 };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "main",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call7b", {
+      sessionKey: targetKey,
+      label: "some-label",
+      agentId: "other-agent",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+    const details = result.details as { status?: string };
+    expect(details.status).toBe("accepted");
+    expect(
+      callGatewayMock.mock.calls.some(
+        ([call]) => (call as { method?: string }).method === "sessions.resolve",
+      ),
+    ).toBe(false);
+    const agentCall = callGatewayMock.mock.calls.find(
+      (call) => (call[0] as { method?: string }).method === "agent",
+    );
+    expect(agentCall?.[0]).toMatchObject({
+      method: "agent",
+      params: { sessionKey: targetKey },
+    });
+  });
+
   it("sessions_send runs ping-pong then announces", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
