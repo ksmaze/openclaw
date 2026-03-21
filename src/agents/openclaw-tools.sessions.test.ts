@@ -86,9 +86,9 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_history", "limit").type).toBe("number");
     expect(schemaProp("sessions_list", "limit").type).toBe("number");
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("number");
-    expect(schemaProp("sessions_list", "messageLimit").type).toBe("number");
     expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("number");
     expect(schemaProp("sessions_spawn", "thinking").type).toBe("string");
+    expect(schemaProp("sessions_spawn", "announceTarget").type).toBe("string");
     expect(schemaProp("sessions_spawn", "runTimeoutSeconds").type).toBe("number");
     expect(schemaProp("sessions_spawn", "thread").type).toBe("boolean");
     expect(schemaProp("sessions_spawn", "mode").type).toBe("string");

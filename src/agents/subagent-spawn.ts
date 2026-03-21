@@ -28,11 +28,7 @@ import {
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
-import {
-  decodeStrictBase64,
-  materializeSubagentAttachments,
-  type SubagentAttachmentReceiptFile,
-} from "./subagent-attachments.js";
+import { decodeStrictBase64, materializeSubagentAttachments } from "./subagent-attachments.js";
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
@@ -47,6 +43,8 @@ export const SUBAGENT_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnSubagentMode = (typeof SUBAGENT_SPAWN_MODES)[number];
 export const SUBAGENT_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 export type SpawnSubagentSandboxMode = (typeof SUBAGENT_SPAWN_SANDBOX_MODES)[number];
+export const SUBAGENT_ANNOUNCE_TARGETS = ["channel", "parent"] as const;
+export type SubagentAnnounceTarget = (typeof SUBAGENT_ANNOUNCE_TARGETS)[number];
 
 export { decodeStrictBase64 };
 
@@ -62,6 +60,7 @@ export type SpawnSubagentParams = {
   cleanup?: "delete" | "keep";
   sandbox?: SpawnSubagentSandboxMode;
   expectsCompletionMessage?: boolean;
+  announceTarget?: SubagentAnnounceTarget;
   attachments?: Array<{
     name: string;
     content: string;
@@ -330,14 +329,22 @@ export async function spawnSubagentDirect(
         ? params.cleanup
         : "keep";
   const expectsCompletionMessage = params.expectsCompletionMessage !== false;
+  const hookRunner = getGlobalHookRunner();
+  const cfg = loadConfig();
+  const announceTarget =
+    params.announceTarget === "parent"
+      ? "parent"
+      : params.announceTarget === "channel"
+        ? "channel"
+        : cfg.agents?.defaults?.subagents?.announceTarget === "parent"
+          ? "parent"
+          : "channel";
   const requesterOrigin = normalizeDeliveryContext({
     channel: ctx.agentChannel,
     accountId: ctx.agentAccountId,
     to: ctx.agentTo,
     threadId: ctx.agentThreadId,
   });
-  const hookRunner = getGlobalHookRunner();
-  const cfg = loadConfig();
 
   // When agent omits runTimeoutSeconds, use the config default.
   // Falls back to 0 (no timeout) if config key is also unset,
@@ -570,7 +577,7 @@ export async function spawnSubagentDirect(
     | {
         count: number;
         totalBytes: number;
-        files: SubagentAttachmentReceiptFile[];
+        files: Array<{ name: string; bytes: number; sha256: string }>;
         relDir: string;
       }
     | undefined;
@@ -752,6 +759,7 @@ export async function spawnSubagentDirect(
       workspaceDir: spawnedMetadata.workspaceDir,
       runTimeoutSeconds,
       expectsCompletionMessage,
+      announceTarget,
       spawnMode,
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,

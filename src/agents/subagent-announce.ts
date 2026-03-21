@@ -46,7 +46,7 @@ import {
 } from "./subagent-announce-dispatch.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import type { SpawnSubagentMode } from "./subagent-spawn.js";
+import type { SpawnSubagentMode, SubagentAnnounceTarget } from "./subagent-spawn.js";
 import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
 import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
 
@@ -689,6 +689,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   const cfg = loadConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const requesterIsSubagent = isInternalAnnounceRequesterSession(item.sessionKey);
+  const shouldDeliverExternally = item.deliverExternally !== false && !requesterIsSubagent;
   const origin = item.origin;
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
@@ -704,11 +705,11 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     params: {
       sessionKey: item.sessionKey,
       message: item.prompt,
-      channel: requesterIsSubagent ? undefined : origin?.channel,
-      accountId: requesterIsSubagent ? undefined : origin?.accountId,
-      to: requesterIsSubagent ? undefined : origin?.to,
-      threadId: requesterIsSubagent ? undefined : threadId,
-      deliver: !requesterIsSubagent,
+      channel: shouldDeliverExternally ? origin?.channel : undefined,
+      accountId: shouldDeliverExternally ? origin?.accountId : undefined,
+      to: shouldDeliverExternally ? origin?.to : undefined,
+      threadId: shouldDeliverExternally ? threadId : undefined,
+      deliver: shouldDeliverExternally,
       internalEvents: item.internalEvents,
       inputProvenance: {
         kind: "inter_session",
@@ -754,7 +755,14 @@ function loadRequesterSessionEntry(requesterSessionKey: string) {
   return { cfg, entry, canonicalKey };
 }
 
-function buildAnnounceQueueKey(sessionKey: string, origin?: DeliveryContext): string {
+function buildAnnounceQueueKey(
+  sessionKey: string,
+  origin?: DeliveryContext,
+  deliverExternally?: boolean,
+): string {
+  if (deliverExternally === false) {
+    return `${sessionKey}:internal`;
+  }
   const accountId = normalizeAccountId(origin?.accountId);
   if (!accountId) {
     return sessionKey;
@@ -768,6 +776,7 @@ async function maybeQueueSubagentAnnounce(params: {
   triggerMessage: string;
   steerMessage: string;
   summaryLine?: string;
+  deliverExternally?: boolean;
   requesterOrigin?: DeliveryContext;
   sourceSessionKey?: string;
   sourceChannel?: string;
@@ -808,7 +817,7 @@ async function maybeQueueSubagentAnnounce(params: {
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
     const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
     enqueueAnnounce({
-      key: buildAnnounceQueueKey(canonicalKey, origin),
+      key: buildAnnounceQueueKey(canonicalKey, origin, params.deliverExternally),
       item: {
         announceId: params.announceId,
         prompt: params.triggerMessage,
@@ -816,6 +825,7 @@ async function maybeQueueSubagentAnnounce(params: {
         internalEvents: params.internalEvents,
         enqueuedAt: Date.now(),
         sessionKey: canonicalKey,
+        deliverExternally: params.deliverExternally,
         origin,
         sourceSessionKey: params.sourceSessionKey,
         sourceChannel: params.sourceChannel,
@@ -835,6 +845,7 @@ async function sendSubagentAnnounceDirectly(params: {
   triggerMessage: string;
   internalEvents?: AgentInternalEvent[];
   expectsCompletionMessage: boolean;
+  deliverExternally?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
   completionDirectOrigin?: DeliveryContext;
@@ -872,11 +883,12 @@ async function sendSubagentAnnounceDirectly(params: {
       directChannelRaw && isDeliverableMessageChannel(directChannelRaw) ? directChannelRaw : "";
     const directTo =
       typeof effectiveDirectOrigin?.to === "string" ? effectiveDirectOrigin.to.trim() : "";
+    const preferExternalDelivery =
+      params.deliverExternally !== false && !params.requesterIsSubagent;
     const hasDeliverableDirectTarget =
-      !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
+      preferExternalDelivery && Boolean(directChannel) && Boolean(directTo);
     const shouldDeliverExternally =
-      !params.requesterIsSubagent &&
-      (!params.expectsCompletionMessage || hasDeliverableDirectTarget);
+      preferExternalDelivery && (!params.expectsCompletionMessage || hasDeliverableDirectTarget);
 
     const threadId =
       effectiveDirectOrigin?.threadId != null && effectiveDirectOrigin.threadId !== ""
@@ -939,6 +951,7 @@ async function deliverSubagentAnnouncement(params: {
   steerMessage: string;
   internalEvents?: AgentInternalEvent[];
   summaryLine?: string;
+  deliverExternally?: boolean;
   requesterOrigin?: DeliveryContext;
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
@@ -962,6 +975,7 @@ async function deliverSubagentAnnouncement(params: {
         triggerMessage: params.triggerMessage,
         steerMessage: params.steerMessage,
         summaryLine: params.summaryLine,
+        deliverExternally: params.deliverExternally,
         requesterOrigin: params.requesterOrigin,
         sourceSessionKey: params.sourceSessionKey,
         sourceChannel: params.sourceChannel,
@@ -974,6 +988,8 @@ async function deliverSubagentAnnouncement(params: {
         targetRequesterSessionKey: params.targetRequesterSessionKey,
         triggerMessage: params.triggerMessage,
         internalEvents: params.internalEvents,
+        expectsCompletionMessage: params.expectsCompletionMessage,
+        deliverExternally: params.deliverExternally,
         directIdempotencyKey: params.directIdempotencyKey,
         completionDirectOrigin: params.completionDirectOrigin,
         directOrigin: params.directOrigin,
@@ -981,7 +997,6 @@ async function deliverSubagentAnnouncement(params: {
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
         requesterIsSubagent: params.requesterIsSubagent,
-        expectsCompletionMessage: params.expectsCompletionMessage,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
       }),
@@ -1002,11 +1017,8 @@ export function buildSubagentSystemPrompt(params: {
   childSessionKey: string;
   label?: string;
   task?: string;
-  /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
-  /** Depth of the child being spawned (1 = sub-agent, 2 = sub-sub-agent). */
   childDepth?: number;
-  /** Config value: max allowed spawn depth. */
   maxSpawnDepth?: number;
 }) {
   const taskText =
@@ -1117,9 +1129,13 @@ function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  announceTarget?: SubagentAnnounceTarget;
 }): string {
   if (params.requesterIsSubagent) {
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
+  }
+  if (params.expectsCompletionMessage && params.announceTarget === "parent") {
+    return `Treat this completed ${params.announceType} as orchestration input. Review the result above, decide the next step, and only send a user-facing update if that is actually appropriate now. Keep this internal context private (don't mention system/log/stats/session details or announce type). If no user-visible reply is needed yet, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
   }
   if (params.expectsCompletionMessage) {
     return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
@@ -1258,6 +1274,7 @@ export async function runSubagentAnnounceFlow(params: {
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  announceTarget?: SubagentAnnounceTarget;
   spawnMode?: SpawnSubagentMode;
   wakeOnDescendantSettle?: boolean;
   signal?: AbortSignal;
@@ -1478,10 +1495,14 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
 
+    const announceTarget = params.announceTarget === "parent" ? "parent" : "channel";
+    const deliverExternally = announceTarget === "channel" && !requesterIsSubagent;
+
     const replyInstruction = buildAnnounceReplyInstruction({
       requesterIsSubagent,
       announceType,
       expectsCompletionMessage,
+      announceTarget,
     });
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,
@@ -1513,7 +1534,7 @@ export async function runSubagentAnnounceFlow(params: {
       directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
     }
     const completionDirectOrigin =
-      expectsCompletionMessage && !requesterIsSubagent
+      expectsCompletionMessage && deliverExternally
         ? await resolveSubagentCompletionOrigin({
             childSessionKey: params.childSessionKey,
             requesterSessionKey: targetRequesterSessionKey,
@@ -1522,8 +1543,13 @@ export async function runSubagentAnnounceFlow(params: {
             spawnMode: params.spawnMode,
             expectsCompletionMessage,
           })
-        : targetRequesterOrigin;
+        : undefined;
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
+    const queuedRequesterOrigin = deliverExternally
+      ? expectsCompletionMessage
+        ? (completionDirectOrigin ?? targetRequesterOrigin)
+        : targetRequesterOrigin
+      : undefined;
     const delivery = await deliverSubagentAnnouncement({
       requesterSessionKey: targetRequesterSessionKey,
       announceId,
@@ -1531,10 +1557,8 @@ export async function runSubagentAnnounceFlow(params: {
       steerMessage: triggerMessage,
       internalEvents,
       summaryLine: taskLabel,
-      requesterOrigin:
-        expectsCompletionMessage && !requesterIsSubagent
-          ? completionDirectOrigin
-          : targetRequesterOrigin,
+      deliverExternally,
+      requesterOrigin: queuedRequesterOrigin,
       completionDirectOrigin,
       directOrigin,
       sourceSessionKey: params.childSessionKey,

@@ -195,6 +195,23 @@ describe("subagent announce timeout config", () => {
     expect(completionDirectAgentCall?.timeoutMs).toBe(90_000);
   });
 
+  it("keeps completion announce internal when announceTarget is parent", async () => {
+    await runAnnounceFlowForTest("run-parent-target", {
+      requesterOrigin: {
+        channel: "discord",
+        to: "12345",
+      },
+      expectsCompletionMessage: true,
+      announceTarget: "parent",
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    expect(directAgentCall?.params?.sessionKey).toBe("agent:main:main");
+    expect(directAgentCall?.params?.deliver).toBe(false);
+    expect(directAgentCall?.params?.channel).toBeUndefined();
+    expect(directAgentCall?.params?.to).toBeUndefined();
+  });
+
   it("does not retry gateway timeout for externally delivered completion announces", async () => {
     vi.useFakeTimers();
     try {

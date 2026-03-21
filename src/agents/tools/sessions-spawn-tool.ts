@@ -8,6 +8,7 @@ import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
+const SESSIONS_SPAWN_ANNOUNCE_TARGETS = ["channel", "parent"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "target",
@@ -40,6 +41,7 @@ const SessionsSpawnToolSchema = Type.Object({
   thread: Type.Optional(Type.Boolean()),
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
+  announceTarget: optionalStringEnum(SESSIONS_SPAWN_ANNOUNCE_TARGETS),
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
   streamTo: optionalStringEnum(ACP_SPAWN_STREAM_TARGETS, {
     description: 'ACP-only. Ignored when runtime != "acp".',
@@ -106,6 +108,12 @@ export function createSessionsSpawnTool(
       const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
+      const announceTarget =
+        params.announceTarget === "parent"
+          ? "parent"
+          : params.announceTarget === "channel"
+            ? "channel"
+            : undefined;
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       // Only relevant for ACP. For runtime=subagent, ignore it (schema-following models may still send it).
       const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
@@ -183,6 +191,7 @@ export function createSessionsSpawnTool(
           thread,
           mode,
           cleanup,
+          announceTarget,
           sandbox,
           expectsCompletionMessage: true,
           attachments,

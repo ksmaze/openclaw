@@ -28,6 +28,7 @@ export type AnnounceQueueItem = {
   internalEvents?: AgentInternalEvent[];
   enqueuedAt: number;
   sessionKey: string;
+  deliverExternally?: boolean;
   origin?: DeliveryContext;
   originKey?: string;
   sourceSessionKey?: string;

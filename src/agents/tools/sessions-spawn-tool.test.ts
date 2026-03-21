@@ -79,10 +79,33 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("forwards announceTarget to subagent runtime", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+    });
+
+    await tool.execute("call-announce-target", {
+      task: "build feature",
+      announceTarget: "parent",
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "build feature",
+        announceTarget: "parent",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("passes inherited workspaceDir from tool context, not from tool args", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       workspaceDir: "/parent/workspace",
+      agentAccountId: "default",
+      agentTo: "channel:123",
+      agentThreadId: "456",
     });
 
     await tool.execute("call-ws", {

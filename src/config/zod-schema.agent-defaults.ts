@@ -188,6 +188,12 @@ export const AgentDefaultsSchema = z
         archiveAfterMinutes: z.number().int().min(0).optional(),
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
+        announceTarget: z
+          .union([z.literal("channel"), z.literal("parent")])
+          .optional()
+          .describe(
+            'Default completion announce routing for spawned sub-agents ("channel" sends user-facing completion updates directly; "parent" sends them to the parent session as orchestration input).',
+          ),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
       })
