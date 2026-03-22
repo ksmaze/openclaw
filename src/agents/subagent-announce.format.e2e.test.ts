@@ -1384,6 +1384,42 @@ describe("subagent announce formatting", () => {
     expect(agentSpy).not.toHaveBeenCalled();
   });
 
+  it("parent-target completion falls back to external delivery when main run is inactive", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-parent-direct",
+        lastChannel: "telegram",
+        lastTo: "telegram:763228190",
+        queueMode: "collect",
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:orchestrator:subagent:test",
+      childRunId: "run-parent-direct",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      expectsCompletionMessage: true,
+      announceTarget: "parent",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(embeddedRunMock.queueEmbeddedPiMessage).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
+      method: "agent",
+      params: {
+        sessionKey: "agent:main:main",
+        channel: "telegram",
+        to: "telegram:763228190",
+        deliver: true,
+      },
+    });
+  });
+
   it("queues announce delivery with origin account routing", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);

@@ -12,6 +12,7 @@ import { callGateway } from "../gateway/call.js";
 import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
+import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -37,6 +38,7 @@ import {
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
 import {
   isEmbeddedPiRunActive,
+  isEmbeddedPiRunStreaming,
   queueEmbeddedPiMessage,
   waitForEmbeddedPiRunEnd,
 } from "./pi-embedded.js";
@@ -782,6 +784,7 @@ async function maybeQueueSubagentAnnounce(params: {
   sourceChannel?: string;
   sourceTool?: string;
   internalEvents?: AgentInternalEvent[];
+  preferQueueForCompletion?: boolean;
   signal?: AbortSignal;
 }): Promise<"steered" | "queued" | "none"> {
   if (params.signal?.aborted) {
@@ -791,6 +794,11 @@ async function maybeQueueSubagentAnnounce(params: {
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
   const sessionId = entry?.sessionId;
   if (!sessionId) {
+    if (params.preferQueueForCompletion) {
+      diag.warn(
+        `subagent announce queue unavailable: requester=${params.requesterSessionKey} canonical=${canonicalKey} reason=no_session_id sourceSession=${params.sourceSessionKey ?? "unknown"}`,
+      );
+    }
     return "none";
   }
 
@@ -800,12 +808,23 @@ async function maybeQueueSubagentAnnounce(params: {
     sessionEntry: entry,
   });
   const isActive = isEmbeddedPiRunActive(sessionId);
+  const isStreaming = isEmbeddedPiRunStreaming(sessionId);
 
   const shouldSteer = queueSettings.mode === "steer" || queueSettings.mode === "steer-backlog";
   if (shouldSteer) {
     const steered = queueEmbeddedPiMessage(sessionId, params.steerMessage);
     if (steered) {
       return "steered";
+    }
+    if (params.preferQueueForCompletion) {
+      const steerFailureReason = !isActive
+        ? "inactive"
+        : !isStreaming
+          ? "not_streaming"
+          : "queue_rejected";
+      diag.warn(
+        `subagent announce steer failed: requester=${params.requesterSessionKey} canonical=${canonicalKey} sessionId=${sessionId} queueMode=${queueSettings.mode} active=${isActive} streaming=${isStreaming} reason=${steerFailureReason} sourceSession=${params.sourceSessionKey ?? "unknown"}`,
+      );
     }
   }
 
@@ -837,6 +856,17 @@ async function maybeQueueSubagentAnnounce(params: {
     return "queued";
   }
 
+  if (params.preferQueueForCompletion) {
+    const queueFailureReason = !isActive
+      ? "inactive"
+      : shouldFollowup || queueSettings.mode === "steer"
+        ? "queue_enqueue_skipped"
+        : "mode_not_queueable";
+    diag.warn(
+      `subagent announce queue unavailable: requester=${params.requesterSessionKey} canonical=${canonicalKey} sessionId=${sessionId} queueMode=${queueSettings.mode} active=${isActive} streaming=${isStreaming} shouldSteer=${shouldSteer} shouldFollowup=${shouldFollowup} reason=${queueFailureReason} sourceSession=${params.sourceSessionKey ?? "unknown"}`,
+    );
+  }
+
   return "none";
 }
 
@@ -854,6 +884,7 @@ async function sendSubagentAnnounceDirectly(params: {
   sourceChannel?: string;
   sourceTool?: string;
   requesterIsSubagent: boolean;
+  preferQueueForCompletion?: boolean;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   if (params.signal?.aborted) {
@@ -883,8 +914,11 @@ async function sendSubagentAnnounceDirectly(params: {
       directChannelRaw && isDeliverableMessageChannel(directChannelRaw) ? directChannelRaw : "";
     const directTo =
       typeof effectiveDirectOrigin?.to === "string" ? effectiveDirectOrigin.to.trim() : "";
+    const allowExternalDirectFallback =
+      params.preferQueueForCompletion === true && !params.requesterIsSubagent;
     const preferExternalDelivery =
-      params.deliverExternally !== false && !params.requesterIsSubagent;
+      !params.requesterIsSubagent &&
+      (params.deliverExternally !== false || allowExternalDirectFallback);
     const hasDeliverableDirectTarget =
       preferExternalDelivery && Boolean(directChannel) && Boolean(directTo);
     const shouldDeliverExternally =
@@ -894,6 +928,11 @@ async function sendSubagentAnnounceDirectly(params: {
       effectiveDirectOrigin?.threadId != null && effectiveDirectOrigin.threadId !== ""
         ? String(effectiveDirectOrigin.threadId)
         : undefined;
+    if (params.preferQueueForCompletion) {
+      diag.warn(
+        `subagent announce direct fallback start: requester=${params.targetRequesterSessionKey} canonical=${canonicalRequesterSessionKey} deliverExternally=${shouldDeliverExternally} channel=${directChannel || "internal"} to=${directTo || "internal"} sourceSession=${params.sourceSessionKey ?? "unknown"}`,
+      );
+    }
     if (params.signal?.aborted) {
       return {
         delivered: false,
@@ -983,6 +1022,7 @@ async function deliverSubagentAnnouncement(params: {
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
         internalEvents: params.internalEvents,
+        preferQueueForCompletion: params.preferQueueForCompletion,
         signal: params.signal,
       }),
     direct: async () =>
@@ -999,6 +1039,7 @@ async function deliverSubagentAnnouncement(params: {
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
         requesterIsSubagent: params.requesterIsSubagent,
+        preferQueueForCompletion: params.preferQueueForCompletion,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
       }),
@@ -1501,6 +1542,10 @@ export async function runSubagentAnnounceFlow(params: {
     const deliverExternally = announceTarget === "channel" && !requesterIsSubagent;
     const preferQueueForCompletion =
       expectsCompletionMessage && announceTarget === "parent" && !requesterIsSubagent;
+    const shouldResolveCompletionDirectOrigin =
+      expectsCompletionMessage &&
+      !requesterIsSubagent &&
+      (deliverExternally || preferQueueForCompletion);
 
     const replyInstruction = buildAnnounceReplyInstruction({
       requesterIsSubagent,
@@ -1537,17 +1582,16 @@ export async function runSubagentAnnounceFlow(params: {
       const { entry } = loadRequesterSessionEntry(targetRequesterSessionKey);
       directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
     }
-    const completionDirectOrigin =
-      expectsCompletionMessage && deliverExternally
-        ? await resolveSubagentCompletionOrigin({
-            childSessionKey: params.childSessionKey,
-            requesterSessionKey: targetRequesterSessionKey,
-            requesterOrigin: directOrigin,
-            childRunId: params.childRunId,
-            spawnMode: params.spawnMode,
-            expectsCompletionMessage,
-          })
-        : undefined;
+    const completionDirectOrigin = shouldResolveCompletionDirectOrigin
+      ? await resolveSubagentCompletionOrigin({
+          childSessionKey: params.childSessionKey,
+          requesterSessionKey: targetRequesterSessionKey,
+          requesterOrigin: directOrigin,
+          childRunId: params.childRunId,
+          spawnMode: params.spawnMode,
+          expectsCompletionMessage,
+        })
+      : undefined;
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
     const queuedRequesterOrigin = deliverExternally
       ? expectsCompletionMessage
@@ -1576,6 +1620,15 @@ export async function runSubagentAnnounceFlow(params: {
       directIdempotencyKey,
       signal: params.signal,
     });
+    if (preferQueueForCompletion) {
+      const phaseSummary =
+        delivery.phases
+          ?.map((phase) => `${phase.phase}:${phase.path}:${phase.delivered ? "delivered" : "miss"}`)
+          .join(",") ?? "none";
+      diag.warn(
+        `subagent announce parent-target completion result: requester=${targetRequesterSessionKey} child=${params.childSessionKey} delivered=${delivery.delivered} path=${delivery.path} phases=${phaseSummary}${delivery.error ? ` error=${delivery.error}` : ""}`,
+      );
+    }
     didAnnounce = delivery.delivered;
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.error?.(
