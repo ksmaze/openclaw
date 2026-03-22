@@ -1409,7 +1409,16 @@ describe("subagent announce formatting", () => {
     expect(didAnnounce).toBe(true);
     expect(embeddedRunMock.queueEmbeddedPiMessage).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: {
+        sessionKey?: string;
+        channel?: string;
+        to?: string;
+        deliver?: boolean;
+        message?: string;
+      };
+    };
+    expect(call).toMatchObject({
       method: "agent",
       params: {
         sessionKey: "agent:main:main",
@@ -1418,6 +1427,11 @@ describe("subagent announce formatting", () => {
         deliver: true,
       },
     });
+    // Direct fallback must use the user-facing reply instruction, not the
+    // internal orchestration one that allows SILENT_REPLY_TOKEN suppression.
+    const msg = call?.params?.message ?? "";
+    expect(msg).toContain("send that user-facing update now");
+    expect(msg).not.toContain("no user-visible reply is needed yet");
   });
 
   it("queues announce delivery with origin account routing", async () => {

@@ -16,6 +16,7 @@ import {
   normalizeOutboundPayloadsForJson,
 } from "../../infra/outbound/payloads.js";
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { diagnosticLogger } from "../../logging/diagnostic.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
@@ -191,6 +192,11 @@ export async function deliverAgentCommandResult(params: {
   }
 
   if (!payloads || payloads.length === 0) {
+    if (opts.inputProvenance?.sourceTool === "subagent_announce" && deliver) {
+      diagnosticLogger.warn(
+        `agent delivery: no payloads from announce-triggered run: sessionKey=${effectiveSessionKey ?? "none"} deliver=${deliver} channel=${deliveryChannel} to=${deliveryTarget ?? "none"} runId=${opts.runId ?? "none"}`,
+      );
+    }
     runtime.log("No reply from agent.");
     return { payloads: [], meta: result.meta };
   }
@@ -216,6 +222,11 @@ export async function deliverAgentCommandResult(params: {
     }
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
+    if (opts.inputProvenance?.sourceTool === "subagent_announce") {
+      diagnosticLogger.warn(
+        `agent delivery: announce-triggered outbound: sessionKey=${effectiveSessionKey ?? "none"} channel=${deliveryChannel} to=${deliveryTarget ?? "none"} payloadCount=${deliveryPayloads.length} runId=${opts.runId ?? "none"}`,
+      );
+    }
     if (deliveryTarget) {
       await deliverOutboundPayloads({
         cfg,

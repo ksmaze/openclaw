@@ -929,8 +929,9 @@ async function sendSubagentAnnounceDirectly(params: {
         ? String(effectiveDirectOrigin.threadId)
         : undefined;
     if (params.preferQueueForCompletion) {
+      const msgSnippet = (params.triggerMessage ?? "").slice(0, 200);
       diag.warn(
-        `subagent announce direct fallback start: requester=${params.targetRequesterSessionKey} canonical=${canonicalRequesterSessionKey} deliverExternally=${shouldDeliverExternally} channel=${directChannel || "internal"} to=${directTo || "internal"} sourceSession=${params.sourceSessionKey ?? "unknown"}`,
+        `subagent announce direct fallback start: requester=${params.targetRequesterSessionKey} canonical=${canonicalRequesterSessionKey} deliverExternally=${shouldDeliverExternally} channel=${directChannel || "internal"} to=${directTo || "internal"} allowExternalDirectFallback=${allowExternalDirectFallback} hasDeliverableDirectTarget=${hasDeliverableDirectTarget} msgSnippet=${msgSnippet} sourceSession=${params.sourceSessionKey ?? "unknown"}`,
       );
     }
     if (params.signal?.aborted) {
@@ -938,6 +939,29 @@ async function sendSubagentAnnounceDirectly(params: {
         delivered: false,
         path: "none",
       };
+    }
+    const agentCallParams = {
+      sessionKey: canonicalRequesterSessionKey,
+      message: params.triggerMessage,
+      deliver: shouldDeliverExternally,
+      bestEffortDeliver: params.bestEffortDeliver,
+      internalEvents: params.internalEvents,
+      channel: shouldDeliverExternally ? directChannel : undefined,
+      accountId: shouldDeliverExternally ? effectiveDirectOrigin?.accountId : undefined,
+      to: shouldDeliverExternally ? directTo : undefined,
+      threadId: shouldDeliverExternally ? threadId : undefined,
+      inputProvenance: {
+        kind: "inter_session" as const,
+        sourceSessionKey: params.sourceSessionKey,
+        sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
+        sourceTool: params.sourceTool ?? "subagent_announce",
+      },
+      idempotencyKey: params.directIdempotencyKey,
+    };
+    if (params.preferQueueForCompletion) {
+      diag.warn(
+        `subagent announce direct fallback agent call: deliver=${agentCallParams.deliver} channel=${agentCallParams.channel ?? "none"} to=${agentCallParams.to ?? "none"} sessionKey=${agentCallParams.sessionKey}`,
+      );
     }
     await runAnnounceDeliveryWithRetry({
       operation: params.expectsCompletionMessage
@@ -947,34 +971,28 @@ async function sendSubagentAnnounceDirectly(params: {
       run: async () =>
         await callGateway({
           method: "agent",
-          params: {
-            sessionKey: canonicalRequesterSessionKey,
-            message: params.triggerMessage,
-            deliver: shouldDeliverExternally,
-            bestEffortDeliver: params.bestEffortDeliver,
-            internalEvents: params.internalEvents,
-            channel: shouldDeliverExternally ? directChannel : undefined,
-            accountId: shouldDeliverExternally ? effectiveDirectOrigin?.accountId : undefined,
-            to: shouldDeliverExternally ? directTo : undefined,
-            threadId: shouldDeliverExternally ? threadId : undefined,
-            inputProvenance: {
-              kind: "inter_session",
-              sourceSessionKey: params.sourceSessionKey,
-              sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
-              sourceTool: params.sourceTool ?? "subagent_announce",
-            },
-            idempotencyKey: params.directIdempotencyKey,
-          },
+          params: agentCallParams,
           expectFinal: true,
           timeoutMs: announceTimeoutMs,
         }),
     });
 
+    if (params.preferQueueForCompletion) {
+      diag.warn(
+        `subagent announce direct fallback agent call completed: requester=${canonicalRequesterSessionKey} deliver=${shouldDeliverExternally}`,
+      );
+    }
     return {
       delivered: true,
       path: "direct",
     };
   } catch (err) {
+    if (params.preferQueueForCompletion) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      diag.warn(
+        `subagent announce direct fallback agent call failed: requester=${canonicalRequesterSessionKey} error=${errMsg}`,
+      );
+    }
     return {
       delivered: false,
       path: "direct",
@@ -1001,6 +1019,8 @@ async function deliverSubagentAnnouncement(params: {
   requesterIsSubagent: boolean;
   expectsCompletionMessage: boolean;
   preferQueueForCompletion?: boolean;
+  directFallbackTriggerMessage?: string;
+  directFallbackInternalEvents?: AgentInternalEvent[];
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
   signal?: AbortSignal;
@@ -1028,8 +1048,8 @@ async function deliverSubagentAnnouncement(params: {
     direct: async () =>
       await sendSubagentAnnounceDirectly({
         targetRequesterSessionKey: params.targetRequesterSessionKey,
-        triggerMessage: params.triggerMessage,
-        internalEvents: params.internalEvents,
+        triggerMessage: params.directFallbackTriggerMessage ?? params.triggerMessage,
+        internalEvents: params.directFallbackInternalEvents ?? params.internalEvents,
         expectsCompletionMessage: params.expectsCompletionMessage,
         deliverExternally: params.deliverExternally,
         directIdempotencyKey: params.directIdempotencyKey,
@@ -1575,6 +1595,31 @@ export async function runSubagentAnnounceFlow(params: {
     ];
     const triggerMessage = buildAnnounceSteerMessage(internalEvents);
 
+    // When queue/steer misses for parent-target completions, the direct
+    // fallback delivers externally. In that case the reply instruction must
+    // be user-facing ("send the update now") instead of the internal
+    // orchestration instruction that allows SILENT_REPLY_TOKEN suppression.
+    let directFallbackTriggerMessage: string | undefined;
+    let directFallbackInternalEvents: AgentInternalEvent[] | undefined;
+    if (preferQueueForCompletion) {
+      const externalReplyInstruction = buildAnnounceReplyInstruction({
+        requesterIsSubagent,
+        announceType,
+        expectsCompletionMessage,
+        announceTarget: "channel",
+      });
+      diag.warn(
+        `subagent announce direct fallback reply instruction swap: original=${replyInstruction.slice(0, 80)} replacement=${externalReplyInstruction.slice(0, 80)}`,
+      );
+      directFallbackInternalEvents = [
+        {
+          ...internalEvents[0],
+          replyInstruction: externalReplyInstruction,
+        },
+      ];
+      directFallbackTriggerMessage = buildAnnounceSteerMessage(directFallbackInternalEvents);
+    }
+
     // Send to the requester session. For nested subagents this is an internal
     // follow-up injection (deliver=false) so the orchestrator receives it.
     let directOrigin = targetRequesterOrigin;
@@ -1616,6 +1661,8 @@ export async function runSubagentAnnounceFlow(params: {
       requesterIsSubagent,
       expectsCompletionMessage: expectsCompletionMessage,
       preferQueueForCompletion,
+      directFallbackTriggerMessage,
+      directFallbackInternalEvents,
       bestEffortDeliver: params.bestEffortDeliver,
       directIdempotencyKey,
       signal: params.signal,

@@ -22,6 +22,7 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { diagnosticLogger } from "../../logging/diagnostic.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -624,6 +625,12 @@ export const agentHandlers: GatewayRequestHandlers = {
         : resolvedChannel);
 
     const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
+
+    if (inputProvenance?.sourceTool === "subagent_announce" && request.deliver === true) {
+      diagnosticLogger.warn(
+        `gateway agent announce delivery decision: sessionKey=${resolvedSessionKey ?? "none"} requestDeliver=${request.deliver} resolvedChannel=${resolvedChannel} resolvedTo=${resolvedTo ?? "none"} resolvedAccountId=${resolvedAccountId ?? "none"} finalDeliver=${deliver} deliveryTargetMode=${deliveryTargetMode ?? "none"} runId=${runId}`,
+      );
+    }
 
     const accepted = {
       runId,
