@@ -961,12 +961,14 @@ async function deliverSubagentAnnouncement(params: {
   targetRequesterSessionKey: string;
   requesterIsSubagent: boolean;
   expectsCompletionMessage: boolean;
+  preferQueueForCompletion?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   return await runSubagentAnnounceDispatch({
     expectsCompletionMessage: params.expectsCompletionMessage,
+    preferQueueForCompletion: params.preferQueueForCompletion,
     signal: params.signal,
     queue: async () =>
       await maybeQueueSubagentAnnounce({
@@ -1497,6 +1499,8 @@ export async function runSubagentAnnounceFlow(params: {
 
     const announceTarget = params.announceTarget === "parent" ? "parent" : "channel";
     const deliverExternally = announceTarget === "channel" && !requesterIsSubagent;
+    const preferQueueForCompletion =
+      expectsCompletionMessage && announceTarget === "parent" && !requesterIsSubagent;
 
     const replyInstruction = buildAnnounceReplyInstruction({
       requesterIsSubagent,
@@ -1567,6 +1571,7 @@ export async function runSubagentAnnounceFlow(params: {
       targetRequesterSessionKey,
       requesterIsSubagent,
       expectsCompletionMessage: expectsCompletionMessage,
+      preferQueueForCompletion,
       bestEffortDeliver: params.bestEffortDeliver,
       directIdempotencyKey,
       signal: params.signal,

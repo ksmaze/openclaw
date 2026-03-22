@@ -1340,10 +1340,45 @@ describe("subagent announce formatting", () => {
       requesterDisplayKey: "main",
       ...defaultOutcomeAnnounce,
     });
-
     expect(didAnnounce).toBe(true);
     expect(embeddedRunMock.queueEmbeddedPiMessage).toHaveBeenCalledWith(
       "session-123",
+      expect.stringContaining("[Internal task completion event]"),
+    );
+    expect(agentSpy).not.toHaveBeenCalled();
+  });
+
+  it("parent-target completion steers active main run before direct dispatch", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(true);
+    embeddedRunMock.queueEmbeddedPiMessage.mockReturnValue(true);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-parent-steer",
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
+        queueMode: "steer",
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-parent-steer",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:12345",
+        accountId: "acct-1",
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      announceTarget: "parent",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(embeddedRunMock.queueEmbeddedPiMessage).toHaveBeenCalledWith(
+      "session-parent-steer",
       expect.stringContaining("[Internal task completion event]"),
     );
     expect(agentSpy).not.toHaveBeenCalled();

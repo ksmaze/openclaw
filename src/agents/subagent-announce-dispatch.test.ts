@@ -87,6 +87,45 @@ describe("runSubagentAnnounceDispatch", () => {
     ]);
   });
 
+  it("uses queue-first ordering for completion mode when preferQueueForCompletion is enabled", async () => {
+    const queue = vi.fn(async () => "steered" as const);
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      preferQueueForCompletion: true,
+      queue,
+      direct,
+    });
+
+    expect(queue).toHaveBeenCalledTimes(1);
+    expect(direct).not.toHaveBeenCalled();
+    expect(result.path).toBe("steered");
+    expect(result.phases).toEqual([
+      { phase: "queue-primary", delivered: true, path: "steered", error: undefined },
+    ]);
+  });
+
+  it("falls back to direct when queue-first completion mode cannot deliver", async () => {
+    const queue = vi.fn(async () => "none" as const);
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      preferQueueForCompletion: true,
+      queue,
+      direct,
+    });
+
+    expect(queue).toHaveBeenCalledTimes(1);
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(result.path).toBe("direct");
+    expect(result.phases).toEqual([
+      { phase: "queue-primary", delivered: false, path: "none", error: undefined },
+      { phase: "direct-primary", delivered: true, path: "direct", error: undefined },
+    ]);
+  });
+
   it("falls back to queue when completion direct send fails", async () => {
     const queue = vi.fn(async () => "steered" as const);
     const direct = vi.fn(async () => ({

@@ -41,6 +41,7 @@ export function mapQueueOutcomeToDeliveryResult(
 
 export async function runSubagentAnnounceDispatch(params: {
   expectsCompletionMessage: boolean;
+  preferQueueForCompletion?: boolean;
   signal?: AbortSignal;
   queue: () => Promise<SubagentAnnounceQueueOutcome>;
   direct: () => Promise<SubagentAnnounceDeliveryResult>;
@@ -70,6 +71,18 @@ export async function runSubagentAnnounceDispatch(params: {
   }
 
   if (!params.expectsCompletionMessage) {
+    const primaryQueue = mapQueueOutcomeToDeliveryResult(await params.queue());
+    appendPhase("queue-primary", primaryQueue);
+    if (primaryQueue.delivered) {
+      return withPhases(primaryQueue);
+    }
+
+    const primaryDirect = await params.direct();
+    appendPhase("direct-primary", primaryDirect);
+    return withPhases(primaryDirect);
+  }
+
+  if (params.preferQueueForCompletion) {
     const primaryQueue = mapQueueOutcomeToDeliveryResult(await params.queue());
     appendPhase("queue-primary", primaryQueue);
     if (primaryQueue.delivered) {
