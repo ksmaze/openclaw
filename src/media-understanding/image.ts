@@ -16,13 +16,12 @@ import type {
   ImagesDescriptionResult,
 } from "./types.js";
 
-let piModelDiscoveryRuntimePromise: Promise<
-  typeof import("../agents/pi-model-discovery-runtime.js")
-> | null = null;
+let piModelResolverPromise: Promise<typeof import("../agents/pi-embedded-runner/model.js")> | null =
+  null;
 
-function loadPiModelDiscoveryRuntime() {
-  piModelDiscoveryRuntimePromise ??= import("../agents/pi-model-discovery-runtime.js");
-  return piModelDiscoveryRuntimePromise;
+function loadPiModelResolver() {
+  piModelResolverPromise ??= import("../agents/pi-embedded-runner/model.js");
+  return piModelResolverPromise;
 }
 
 function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
@@ -45,13 +44,19 @@ async function resolveImageRuntime(params: {
   preferredProfile?: string;
 }): Promise<{ apiKey: string; model: Model<Api> }> {
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
-  const { discoverAuthStorage, discoverModels } = await loadPiModelDiscoveryRuntime();
-  const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir);
+  const { resolveModel } = await loadPiModelResolver();
   const resolvedRef = normalizeModelRef(params.provider, params.model);
-  const model = modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model<Api> | null;
+  const resolved = resolveModel(
+    resolvedRef.provider,
+    resolvedRef.model,
+    params.agentDir,
+    params.cfg,
+  );
+  const model = resolved.model;
   if (!model) {
-    throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
+    throw new Error(
+      resolved.error ?? `Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`,
+    );
   }
   if (!model.input?.includes("image")) {
     throw new Error(`Model does not support images: ${params.provider}/${params.model}`);
@@ -64,7 +69,7 @@ async function resolveImageRuntime(params: {
     preferredProfile: params.preferredProfile,
   });
   const apiKey = requireApiKey(apiKeyInfo, model.provider);
-  authStorage.setRuntimeApiKey(model.provider, apiKey);
+  resolved.authStorage.setRuntimeApiKey(model.provider, apiKey);
   return { apiKey, model };
 }
 

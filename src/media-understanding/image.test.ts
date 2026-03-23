@@ -16,7 +16,7 @@ const hoisted = vi.hoisted(() => ({
   })),
   requireApiKeyMock: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
   setRuntimeApiKeyMock: vi.fn(),
-  discoverModelsMock: vi.fn(),
+  resolveModelMock: vi.fn(),
 }));
 const {
   completeMock,
@@ -26,7 +26,7 @@ const {
   resolveApiKeyForProviderMock,
   requireApiKeyMock,
   setRuntimeApiKeyMock,
-  discoverModelsMock,
+  resolveModelMock,
 } = hoisted;
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
@@ -55,12 +55,13 @@ vi.mock("../agents/model-auth.js", () => ({
   requireApiKey: requireApiKeyMock,
 }));
 
-vi.mock("../agents/pi-model-discovery-runtime.js", () => ({
-  discoverAuthStorage: () => ({
-    setRuntimeApiKey: setRuntimeApiKeyMock,
-  }),
-  discoverModels: discoverModelsMock,
-}));
+vi.mock("../agents/pi-embedded-runner/model.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/pi-embedded-runner/model.js")>();
+  return {
+    ...actual,
+    resolveModel: resolveModelMock,
+  };
+});
 
 let describeImageWithModel: typeof import("./image.js").describeImageWithModel;
 
@@ -89,22 +90,25 @@ describe("describeImageWithModel", () => {
       resolveApiKeyForProvider: resolveApiKeyForProviderMock,
       requireApiKey: requireApiKeyMock,
     }));
-    vi.doMock("../agents/pi-model-discovery-runtime.js", () => ({
-      discoverAuthStorage: () => ({
-        setRuntimeApiKey: setRuntimeApiKeyMock,
-      }),
-      discoverModels: discoverModelsMock,
-    }));
+    vi.doMock("../agents/pi-embedded-runner/model.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../agents/pi-embedded-runner/model.js")>();
+      return {
+        ...actual,
+        resolveModel: resolveModelMock,
+      };
+    });
     ({ describeImageWithModel } = await import("./image.js"));
     vi.clearAllMocks();
     minimaxUnderstandImageMock.mockResolvedValue("portal ok");
-    discoverModelsMock.mockReturnValue({
-      find: vi.fn(() => ({
+    resolveModelMock.mockReturnValue({
+      model: {
         provider: "minimax-portal",
         id: "MiniMax-VL-01",
         input: ["text", "image"],
         baseUrl: "https://api.minimax.io/anthropic",
-      })),
+      },
+      authStorage: { setRuntimeApiKey: setRuntimeApiKeyMock },
+      modelRegistry: {},
     });
   });
 
@@ -139,13 +143,15 @@ describe("describeImageWithModel", () => {
   });
 
   it("uses generic completion for non-canonical minimax-portal image models", async () => {
-    discoverModelsMock.mockReturnValue({
-      find: vi.fn(() => ({
+    resolveModelMock.mockReturnValue({
+      model: {
         provider: "minimax-portal",
         id: "custom-vision",
         input: ["text", "image"],
         baseUrl: "https://api.minimax.io/anthropic",
-      })),
+      },
+      authStorage: { setRuntimeApiKey: setRuntimeApiKeyMock },
+      modelRegistry: {},
     });
     completeMock.mockResolvedValue({
       role: "assistant",
@@ -178,17 +184,20 @@ describe("describeImageWithModel", () => {
   });
 
   it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {
-    const findMock = vi.fn((provider: string, modelId: string) => {
+    resolveModelMock.mockImplementation((provider: string, modelId: string) => {
       expect(provider).toBe("google");
       expect(modelId).toBe("gemini-3-flash-preview");
       return {
-        provider: "google",
-        id: "gemini-3-flash-preview",
-        input: ["text", "image"],
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        model: {
+          provider: "google",
+          id: "gemini-3-flash-preview",
+          input: ["text", "image"],
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        },
+        authStorage: { setRuntimeApiKey: setRuntimeApiKeyMock },
+        modelRegistry: {},
       };
     });
-    discoverModelsMock.mockReturnValue({ find: findMock });
     completeMock.mockResolvedValue({
       role: "assistant",
       api: "google-generative-ai",
@@ -216,7 +225,7 @@ describe("describeImageWithModel", () => {
       text: "flash ok",
       model: "gemini-3-flash-preview",
     });
-    expect(findMock).toHaveBeenCalledOnce();
+    expect(resolveModelMock).toHaveBeenCalledOnce();
     expect(getApiKeyForModelMock).toHaveBeenCalledWith(
       expect.objectContaining({
         profileId: "google:default",
@@ -226,17 +235,20 @@ describe("describeImageWithModel", () => {
   });
 
   it("normalizes gemini 3.1 flash-lite ids before lookup and keeps profile auth selection", async () => {
-    const findMock = vi.fn((provider: string, modelId: string) => {
+    resolveModelMock.mockImplementation((provider: string, modelId: string) => {
       expect(provider).toBe("google");
       expect(modelId).toBe("gemini-3.1-flash-lite-preview");
       return {
-        provider: "google",
-        id: "gemini-3.1-flash-lite-preview",
-        input: ["text", "image"],
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        model: {
+          provider: "google",
+          id: "gemini-3.1-flash-lite-preview",
+          input: ["text", "image"],
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        },
+        authStorage: { setRuntimeApiKey: setRuntimeApiKeyMock },
+        modelRegistry: {},
       };
     });
-    discoverModelsMock.mockReturnValue({ find: findMock });
     completeMock.mockResolvedValue({
       role: "assistant",
       api: "google-generative-ai",
@@ -264,7 +276,7 @@ describe("describeImageWithModel", () => {
       text: "flash lite ok",
       model: "gemini-3.1-flash-lite-preview",
     });
-    expect(findMock).toHaveBeenCalledOnce();
+    expect(resolveModelMock).toHaveBeenCalledOnce();
     expect(getApiKeyForModelMock).toHaveBeenCalledWith(
       expect.objectContaining({
         profileId: "google:default",

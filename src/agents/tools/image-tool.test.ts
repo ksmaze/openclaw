@@ -63,6 +63,41 @@ vi.mock("../../media-understanding/provider-registry.js", async (importOriginal)
   };
 });
 
+vi.mock("../../media-understanding/image-runtime.js", () => ({
+  describeImageWithModel: async (params: ImageDescriptionRequest) => {
+    const baseUrl =
+      params.cfg?.models?.providers?.[params.provider]?.baseUrl?.trim() ?? "https://localhost/v1";
+    await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer test-key",
+      },
+      body: JSON.stringify({
+        model: params.model,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: params.prompt ?? "Describe the image." },
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:${params.mime ?? "image/jpeg"};base64,${params.buffer.toString("base64")}`,
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    return { text: `ok ${params.provider}`, model: params.model };
+  },
+  describeImagesWithModel: async (params: ImagesDescriptionRequest) => {
+    return { text: "multi-image fallback", model: params.model };
+  },
+}));
+
 async function writeAuthProfiles(agentDir: string, profiles: unknown) {
   await fs.mkdir(agentDir, { recursive: true });
   await fs.writeFile(
@@ -627,6 +662,53 @@ describe("image tool implicit imageModel config", () => {
       expect(bodyRaw).not.toContain('"role":"developer"');
       expect(result.content).toEqual(
         expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok moonshot" })]),
+      );
+    });
+  });
+
+  it("resolves custom image models from config when provider apiKey uses SecretInput", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "bailian:default": { type: "api_key", provider: "bailian", key: "bailian-test" },
+        },
+      });
+      const fetch = stubOpenAiCompletionsOkFetch("ok bailian");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "bailian/qwen3.5-plus" },
+            imageModel: { primary: "bailian/qwen3.5-plus" },
+          },
+        },
+        models: {
+          providers: {
+            bailian: {
+              api: "openai-completions",
+              baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "BAILIAN_API_KEY",
+              },
+              models: [makeModelDefinition("qwen3.5-plus", ["text", "image"])],
+            },
+          },
+        },
+      };
+
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+      const result = await tool.execute("t1", {
+        prompt: "Describe this image in one word.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      const [url] = fetch.mock.calls[0] as [unknown];
+      expect(String(url)).toBe("https://coding.dashscope.aliyuncs.com/v1/chat/completions");
+      expect(result.content).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok bailian" })]),
       );
     });
   });
