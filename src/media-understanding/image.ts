@@ -8,6 +8,7 @@ import {
 } from "../agents/model-auth.js";
 import { normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
+import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import { coerceImageAssistantText } from "../agents/tools/image-tool.helpers.js";
 import type {
   ImageDescriptionRequest,
@@ -15,14 +16,6 @@ import type {
   ImagesDescriptionRequest,
   ImagesDescriptionResult,
 } from "./types.js";
-
-let piModelResolverPromise: Promise<typeof import("../agents/pi-embedded-runner/model.js")> | null =
-  null;
-
-function loadPiModelResolver() {
-  piModelResolverPromise ??= import("../agents/pi-embedded-runner/model.js");
-  return piModelResolverPromise;
-}
 
 function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
   if (
@@ -44,7 +37,6 @@ async function resolveImageRuntime(params: {
   preferredProfile?: string;
 }): Promise<{ apiKey: string; model: Model<Api> }> {
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
-  const { resolveModel } = await loadPiModelResolver();
   const resolvedRef = normalizeModelRef(params.provider, params.model);
   const resolved = resolveModel(
     resolvedRef.provider,
