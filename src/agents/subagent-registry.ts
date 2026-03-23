@@ -14,6 +14,7 @@ import { resolveContextEngine } from "../context-engine/registry.js";
 import type { SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
@@ -79,6 +80,12 @@ const MAX_ANNOUNCE_RETRY_DELAY_MS = 8_000;
  * returns `false` due to stale state or transient conditions (#18264).
  */
 const MAX_ANNOUNCE_RETRY_COUNT = 3;
+/**
+ * Completion-message flows get a higher retry budget because the main agent
+ * may be inactive / mid-turn when the first attempts fire, and the direct
+ * fallback can transiently fail (e.g. gateway timeout, zero-payload response).
+ */
+const MAX_ANNOUNCE_COMPLETION_RETRY_COUNT = 8;
 /**
  * Non-completion announce entries older than this are force-expired even if
  * delivery never succeeded.
@@ -706,7 +713,11 @@ function resumeSubagentRun(runId: string) {
     return;
   }
   // Skip entries that have exhausted their retry budget or expired (#18264).
-  if ((entry.announceRetryCount ?? 0) >= MAX_ANNOUNCE_RETRY_COUNT) {
+  const maxRetries =
+    entry.expectsCompletionMessage === true
+      ? MAX_ANNOUNCE_COMPLETION_RETRY_COUNT
+      : MAX_ANNOUNCE_RETRY_COUNT;
+  if ((entry.announceRetryCount ?? 0) >= maxRetries) {
     logAnnounceGiveUp(entry, "retry-limit");
     entry.cleanupCompletedAt = Date.now();
     persistSubagentRuns();
@@ -1012,17 +1023,27 @@ async function finalizeSubagentCleanup(
   }
 
   const now = Date.now();
+  const activeDescendants = Math.max(0, countPendingDescendantRuns(entry.childSessionKey));
+  const effectiveMaxRetries =
+    entry.expectsCompletionMessage === true
+      ? MAX_ANNOUNCE_COMPLETION_RETRY_COUNT
+      : MAX_ANNOUNCE_RETRY_COUNT;
   const deferredDecision = resolveDeferredCleanupDecision({
     entry,
     now,
     // Defer until descendants are fully settled, including post-end cleanup.
-    activeDescendantRuns: Math.max(0, countPendingDescendantRuns(entry.childSessionKey)),
+    activeDescendantRuns: activeDescendants,
     announceExpiryMs: ANNOUNCE_EXPIRY_MS,
     announceCompletionHardExpiryMs: ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
-    maxAnnounceRetryCount: MAX_ANNOUNCE_RETRY_COUNT,
+    maxAnnounceRetryCount: effectiveMaxRetries,
     deferDescendantDelayMs: MIN_ANNOUNCE_RETRY_DELAY_MS,
     resolveAnnounceRetryDelayMs,
   });
+  if (entry.expectsCompletionMessage === true) {
+    diag.warn(
+      `subagent announce cleanup deferred decision: run=${runId} child=${entry.childSessionKey} requester=${entry.requesterSessionKey} decision=${deferredDecision.kind} activeDescendants=${activeDescendants} retryCount=${entry.announceRetryCount ?? 0} maxRetries=${effectiveMaxRetries}${deferredDecision.kind === "give-up" ? ` reason=${deferredDecision.reason}` : ""}`,
+    );
+  }
 
   if (deferredDecision.kind === "defer-descendants") {
     entry.lastAnnounceRetryAt = now;

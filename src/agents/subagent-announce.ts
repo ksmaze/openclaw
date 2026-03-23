@@ -1347,6 +1347,11 @@ export async function runSubagentAnnounceFlow(params: {
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
   const announceType = params.announceType ?? "subagent task";
   let shouldDeleteChildSession = params.cleanup === "delete";
+  if (expectsCompletionMessage) {
+    diag.warn(
+      `subagent announce completion flow entry: child=${params.childSessionKey} requester=${params.requesterSessionKey} announceTarget=${params.announceTarget ?? "channel"} childRunId=${params.childRunId}`,
+    );
+  }
   try {
     let targetRequesterSessionKey = params.requesterSessionKey;
     let targetRequesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
@@ -1362,6 +1367,11 @@ export async function runSubagentAnnounceFlow(params: {
     if (childSessionId && isEmbeddedPiRunActive(childSessionId)) {
       const settled = await waitForEmbeddedPiRunEnd(childSessionId, settleTimeoutMs);
       if (!settled && isEmbeddedPiRunActive(childSessionId)) {
+        if (expectsCompletionMessage) {
+          diag.warn(
+            `subagent announce completion bail: reason=embedded_pi_still_active child=${params.childSessionKey} sessionId=${childSessionId}`,
+          );
+        }
         shouldDeleteChildSession = false;
         return false;
       }
@@ -1426,6 +1436,11 @@ export async function runSubagentAnnounceFlow(params: {
         subagentRegistryRuntime.countPendingDescendantRuns(params.childSessionKey),
       );
       if (pendingChildDescendantRuns > 0 && announceType !== "cron job") {
+        if (expectsCompletionMessage) {
+          diag.warn(
+            `subagent announce completion bail: reason=pending_descendants child=${params.childSessionKey} count=${pendingChildDescendantRuns}`,
+          );
+        }
         shouldDeleteChildSession = false;
         return false;
       }
@@ -1546,6 +1561,11 @@ export async function runSubagentAnnounceFlow(params: {
         if (!parentSessionAlive) {
           const fallback = resolveRequesterForChildSession(targetRequesterSessionKey);
           if (!fallback?.requesterSessionKey) {
+            if (expectsCompletionMessage) {
+              diag.warn(
+                `subagent announce completion bail: reason=parent_session_dead_no_fallback child=${params.childSessionKey} requester=${targetRequesterSessionKey}`,
+              );
+            }
             shouldDeleteChildSession = false;
             return false;
           }
@@ -1684,6 +1704,11 @@ export async function runSubagentAnnounceFlow(params: {
     }
   } catch (err) {
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
+    if (expectsCompletionMessage) {
+      diag.warn(
+        `subagent announce completion exception: child=${params.childSessionKey} requester=${params.requesterSessionKey} error=${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
   } finally {
     // Patch label after all writes complete
