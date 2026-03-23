@@ -2082,7 +2082,8 @@ describe("subagent announce formatting", () => {
         ...(testCase.roundOneReply ? { roundOneReply: testCase.roundOneReply } : {}),
       });
 
-      expect(didAnnounce).toBe(false);
+      const expectedResult = testCase.expectsCompletionMessage ? "deferred-descendants" : false;
+      expect(didAnnounce).toBe(expectedResult);
       expect(agentSpy).not.toHaveBeenCalled();
       expect(sendSpy).not.toHaveBeenCalled();
     }
@@ -2408,7 +2409,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
       expectsCompletionMessage: true,
     });
-    expect(parentDeferred).toBe(false);
+    expect(parentDeferred).toBe("deferred-descendants");
     expect(agentSpy).not.toHaveBeenCalled();
 
     const childAnnounced = await runSubagentAnnounceFlow({
@@ -2805,7 +2806,7 @@ describe("subagent announce formatting", () => {
         ...defaultOutcomeAnnounce,
         expectsCompletionMessage: true,
       });
-      expect(deferred).toBe(false);
+      expect(deferred).toBe("deferred-descendants");
       expect(agentSpy).not.toHaveBeenCalled();
 
       pending = 0;
@@ -2864,7 +2865,7 @@ describe("subagent announce formatting", () => {
         ...defaultOutcomeAnnounce,
         expectsCompletionMessage: true,
       });
-      expect(prematureAttempt).toBe(false);
+      expect(prematureAttempt).toBe("deferred-descendants");
       expect(agentSpy).not.toHaveBeenCalled();
 
       pendingSlowChild = 0;
@@ -2937,7 +2938,7 @@ describe("subagent announce formatting", () => {
         ...defaultOutcomeAnnounce,
         expectsCompletionMessage: true,
       });
-      expect(middleDeferred).toBe(false);
+      expect(middleDeferred).toBe("deferred-descendants");
 
       middlePending = 0;
       const middleAnnounced = await runSubagentAnnounceFlow({
@@ -3083,7 +3084,7 @@ describe("subagent announce formatting", () => {
         ...defaultOutcomeAnnounce,
         expectsCompletionMessage: true,
       });
-      expect(first).toBe(false);
+      expect(first).toBe("deferred-descendants");
       expect(agentSpy).not.toHaveBeenCalled();
 
       pending = 0;
@@ -3151,7 +3152,7 @@ describe("subagent announce formatting", () => {
         ...defaultOutcomeAnnounce,
         expectsCompletionMessage: true,
       });
-      expect(parentDeferred).toBe(false);
+      expect(parentDeferred).toBe("deferred-descendants");
 
       const childAnnounced = await runSubagentAnnounceFlow({
         childSessionKey,

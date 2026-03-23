@@ -1342,7 +1342,7 @@ export async function runSubagentAnnounceFlow(params: {
   wakeOnDescendantSettle?: boolean;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
-}): Promise<boolean> {
+}): Promise<boolean | "deferred-descendants"> {
   let didAnnounce = false;
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
   const announceType = params.announceType ?? "subagent task";
@@ -1442,7 +1442,7 @@ export async function runSubagentAnnounceFlow(params: {
           );
         }
         shouldDeleteChildSession = false;
-        return false;
+        return expectsCompletionMessage ? "deferred-descendants" : false;
       }
 
       if (typeof subagentRegistryRuntime.listSubagentRunsForRequester === "function") {

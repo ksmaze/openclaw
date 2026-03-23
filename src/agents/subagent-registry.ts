@@ -642,16 +642,18 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     return false;
   }
   const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
-  const finalizeAnnounceCleanup = (didAnnounce: boolean) => {
-    void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce).catch((err) => {
-      defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
-      const current = subagentRuns.get(runId);
-      if (!current || current.cleanupCompletedAt) {
-        return;
-      }
-      current.cleanupHandled = false;
-      persistSubagentRuns();
-    });
+  const finalizeAnnounceCleanup = (didAnnounce: boolean, bailedForDescendants?: boolean) => {
+    void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce, bailedForDescendants).catch(
+      (err) => {
+        defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
+        const current = subagentRuns.get(runId);
+        if (!current || current.cleanupCompletedAt) {
+          return;
+        }
+        current.cleanupHandled = false;
+        persistSubagentRuns();
+      },
+    );
   };
 
   void runSubagentAnnounceFlow({
@@ -675,8 +677,9 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     announceTarget: entry.announceTarget,
     wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
   })
-    .then((didAnnounce) => {
-      finalizeAnnounceCleanup(didAnnounce);
+    .then((result) => {
+      const bailedForDescendants = result === "deferred-descendants";
+      finalizeAnnounceCleanup(bailedForDescendants ? false : !!result, bailedForDescendants);
     })
     .catch((error) => {
       defaultRuntime.log(
@@ -993,6 +996,7 @@ async function finalizeSubagentCleanup(
   runId: string,
   cleanup: "delete" | "keep",
   didAnnounce: boolean,
+  bailedForDescendants?: boolean,
 ) {
   const entry = subagentRuns.get(runId);
   if (!entry) {
@@ -1023,7 +1027,12 @@ async function finalizeSubagentCleanup(
   }
 
   const now = Date.now();
-  const activeDescendants = Math.max(0, countPendingDescendantRuns(entry.childSessionKey));
+  const freshDescendants = Math.max(0, countPendingDescendantRuns(entry.childSessionKey));
+  // Race-condition guard: if the announce flow bailed because it saw pending
+  // descendants but by the time we re-check here the count transiently
+  // dropped to 0, force activeDescendants >= 1 so resolveDeferredCleanupDecision
+  // takes the defer-descendants path instead of burning retry budget.
+  const activeDescendants = bailedForDescendants ? Math.max(freshDescendants, 1) : freshDescendants;
   const effectiveMaxRetries =
     entry.expectsCompletionMessage === true
       ? MAX_ANNOUNCE_COMPLETION_RETRY_COUNT
@@ -1041,7 +1050,7 @@ async function finalizeSubagentCleanup(
   });
   if (entry.expectsCompletionMessage === true) {
     diag.warn(
-      `subagent announce cleanup deferred decision: run=${runId} child=${entry.childSessionKey} requester=${entry.requesterSessionKey} decision=${deferredDecision.kind} activeDescendants=${activeDescendants} retryCount=${entry.announceRetryCount ?? 0} maxRetries=${effectiveMaxRetries}${deferredDecision.kind === "give-up" ? ` reason=${deferredDecision.reason}` : ""}`,
+      `subagent announce cleanup deferred decision: run=${runId} child=${entry.childSessionKey} requester=${entry.requesterSessionKey} decision=${deferredDecision.kind} activeDescendants=${activeDescendants}${bailedForDescendants ? ` (fresh=${freshDescendants} forced>=1)` : ""} retryCount=${entry.announceRetryCount ?? 0} maxRetries=${effectiveMaxRetries}${deferredDecision.kind === "give-up" ? ` reason=${deferredDecision.reason}` : ""}`,
     );
   }
 
