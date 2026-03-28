@@ -45,6 +45,7 @@ import {
 import {
   runSubagentAnnounceDispatch,
   type SubagentAnnounceDeliveryResult,
+  type SubagentAnnounceQueueOutcome,
 } from "./subagent-announce-dispatch.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
@@ -901,7 +902,7 @@ async function maybeQueueSubagentAnnounce(params: {
   internalEvents?: AgentInternalEvent[];
   preferQueueForCompletion?: boolean;
   signal?: AbortSignal;
-}): Promise<"steered" | "queued" | "none" | "dropped"> {
+}): Promise<SubagentAnnounceQueueOutcome> {
   if (params.signal?.aborted) {
     return "none";
   }
