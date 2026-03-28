@@ -294,6 +294,11 @@ function reconcileOrphanedRun(params: {
     params.entry.cleanupCompletedAt = now;
     changed = true;
   }
+  const shouldDeleteAttachments =
+    params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
+  if (shouldDeleteAttachments) {
+    void safeRemoveAttachmentsDir(params.entry);
+  }
   const removed = subagentRuns.delete(params.runId);
   resumedRuns.delete(params.runId);
   if (!removed && !changed) {
@@ -443,6 +448,12 @@ async function emitSubagentEndedHookForRun(params: {
   sendFarewell?: boolean;
   accountId?: string;
 }) {
+  const cfg = loadConfig();
+  ensureRuntimePluginsLoaded({
+    config: cfg,
+    workspaceDir: params.entry.workspaceDir,
+    allowGatewaySubagentBinding: true,
+  });
   const reason = params.reason ?? params.entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
   const outcome = resolveLifecycleOutcomeFromRunOutcome(params.entry.outcome);
   const error = params.entry.outcome?.status === "error" ? params.entry.outcome.error : undefined;
@@ -721,9 +732,11 @@ function resumeSubagentRun(runId: string) {
       ? MAX_ANNOUNCE_COMPLETION_RETRY_COUNT
       : MAX_ANNOUNCE_RETRY_COUNT;
   if ((entry.announceRetryCount ?? 0) >= maxRetries) {
-    logAnnounceGiveUp(entry, "retry-limit");
-    entry.cleanupCompletedAt = Date.now();
-    persistSubagentRuns();
+    void finalizeResumedAnnounceGiveUp({
+      runId,
+      entry,
+      reason: "retry-limit",
+    });
     return;
   }
   if (
@@ -731,9 +744,11 @@ function resumeSubagentRun(runId: string) {
     typeof entry.endedAt === "number" &&
     Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS
   ) {
-    logAnnounceGiveUp(entry, "expiry");
-    entry.cleanupCompletedAt = Date.now();
-    persistSubagentRuns();
+    void finalizeResumedAnnounceGiveUp({
+      runId,
+      entry,
+      reason: "expiry",
+    });
     return;
   }
 
@@ -1085,7 +1100,7 @@ async function finalizeSubagentCleanup(
     completeCleanupBookkeeping({
       runId,
       entry,
-      cleanup: "keep",
+      cleanup,
       completedAt: now,
     });
     return;
@@ -1103,6 +1118,30 @@ async function finalizeSubagentCleanup(
   setTimeout(() => {
     resumeSubagentRun(runId);
   }, deferredDecision.resumeDelayMs).unref?.();
+}
+
+async function finalizeResumedAnnounceGiveUp(params: {
+  runId: string;
+  entry: SubagentRunRecord;
+  reason: "retry-limit" | "expiry";
+}) {
+  params.entry.wakeOnDescendantSettle = undefined;
+  params.entry.fallbackFrozenResultText = undefined;
+  params.entry.fallbackFrozenResultCapturedAt = undefined;
+  const shouldDeleteAttachments =
+    params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
+  if (shouldDeleteAttachments) {
+    await safeRemoveAttachmentsDir(params.entry);
+  }
+  const completionReason = resolveCleanupCompletionReason(params.entry);
+  await emitCompletionEndedHookIfNeeded(params.entry, completionReason);
+  logAnnounceGiveUp(params.entry, params.reason);
+  completeCleanupBookkeeping({
+    runId: params.runId,
+    entry: params.entry,
+    cleanup: params.entry.cleanup,
+    completedAt: Date.now(),
+  });
 }
 
 async function emitCompletionEndedHookIfNeeded(
@@ -1171,9 +1210,24 @@ function retryDeferredCompletedAnnounces(excludeRunId?: string) {
     // stay pending while descendants run for a long time.
     const endedAgo = now - (entry.endedAt ?? now);
     if (entry.expectsCompletionMessage !== true && endedAgo > ANNOUNCE_EXPIRY_MS) {
-      logAnnounceGiveUp(entry, "expiry");
-      entry.cleanupCompletedAt = now;
-      persistSubagentRuns();
+      if (!beginSubagentCleanup(runId)) {
+        continue;
+      }
+      void finalizeResumedAnnounceGiveUp({
+        runId,
+        entry,
+        reason: "expiry",
+      }).catch((error) => {
+        defaultRuntime.log(
+          `[warn] Subagent expiry finalize failed during deferred retry for run ${runId}: ${String(error)}`,
+        );
+        const current = subagentRuns.get(runId);
+        if (!current || current.cleanupCompletedAt) {
+          return;
+        }
+        current.cleanupHandled = false;
+        persistSubagentRuns();
+      });
       continue;
     }
     resumedRuns.delete(runId);
@@ -1303,6 +1357,10 @@ export function replaceSubagentRunAfterSteer(params: {
 
   if (previousRunId !== nextRunId) {
     clearPendingLifecycleError(previousRunId);
+    const shouldDeleteAttachments = source.cleanup === "delete" || !source.retainAttachmentsOnKeep;
+    if (shouldDeleteAttachments) {
+      void safeRemoveAttachmentsDir(source);
+    }
     subagentRuns.delete(previousRunId);
     resumedRuns.delete(previousRunId);
   }
@@ -1529,6 +1587,10 @@ export function releaseSubagentRun(runId: string) {
   clearPendingLifecycleError(runId);
   const entry = subagentRuns.get(runId);
   if (entry) {
+    const shouldDeleteAttachments = entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+    if (shouldDeleteAttachments) {
+      void safeRemoveAttachmentsDir(entry);
+    }
     void notifyContextEngineSubagentEnded({
       childSessionKey: entry.childSessionKey,
       reason: "released",
@@ -1567,16 +1629,17 @@ export function resolveRequesterForChildSession(childSessionKey: string): {
 
 export function isSubagentSessionRunActive(childSessionKey: string): boolean {
   const runIds = findRunIdsByChildSessionKey(childSessionKey);
+  let latest: SubagentRunRecord | undefined;
   for (const runId of runIds) {
     const entry = subagentRuns.get(runId);
     if (!entry) {
       continue;
     }
-    if (typeof entry.endedAt !== "number") {
-      return true;
+    if (!latest || entry.createdAt > latest.createdAt) {
+      latest = entry;
     }
   }
-  return false;
+  return Boolean(latest && typeof latest.endedAt !== "number");
 }
 
 export function shouldIgnorePostCompletionAnnounceForSession(childSessionKey: string): boolean {
@@ -1638,10 +1701,27 @@ export function markSubagentRunTerminated(params: {
           childSessionKey: entry.childSessionKey,
         });
       });
+      const shouldDeleteAttachments = entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+      if (shouldDeleteAttachments) {
+        void safeRemoveAttachmentsDir(entry);
+      }
+      completeCleanupBookkeeping({
+        runId: entry.runId,
+        entry,
+        cleanup: entry.cleanup,
+        completedAt: now,
+      });
+      const cfg = loadConfig();
+      ensureRuntimePluginsLoaded({
+        config: cfg,
+        workspaceDir: entry.workspaceDir,
+        allowGatewaySubagentBinding: true,
+      });
       void emitSubagentEndedHookOnce({
         entry,
         reason: SUBAGENT_ENDED_REASON_KILLED,
         sendFarewell: true,
+        accountId: entry.requesterOrigin?.accountId,
         outcome: SUBAGENT_ENDED_OUTCOME_KILLED,
         error: reason,
         inFlightRunIds: endedHookInFlightRunIds,
@@ -1731,6 +1811,27 @@ export function getSubagentRunByChildSessionKey(childSessionKey: string): Subage
   }
 
   return latestActive ?? latestEnded;
+}
+
+export function getLatestSubagentRunByChildSessionKey(
+  childSessionKey: string,
+): SubagentRunRecord | null {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return null;
+  }
+
+  let latest: SubagentRunRecord | null = null;
+  for (const entry of getSubagentRunsSnapshotForRead(subagentRuns).values()) {
+    if (entry.childSessionKey !== key) {
+      continue;
+    }
+    if (!latest || entry.createdAt > latest.createdAt) {
+      latest = entry;
+    }
+  }
+
+  return latest;
 }
 
 export function initSubagentRegistry() {
