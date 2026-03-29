@@ -7,7 +7,7 @@ import {
 import { getMediaUnderstandingProvider } from "../../media-understanding/provider-registry.js";
 import { buildProviderRegistry } from "../../media-understanding/runner.js";
 import { loadWebMedia } from "../../media/web-media.js";
-import type { MediaUnderstandingProvider } from "../../plugin-sdk/media-understanding.js";
+import { type MediaUnderstandingProvider } from "../../plugin-sdk/media-understanding.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
@@ -168,14 +168,11 @@ async function runImagePrompt(params: {
         provider,
         providerRegistry as Map<string, MediaUnderstandingProvider>,
       );
-
-      // When no media-understanding provider is registered (e.g. custom
-      // providers from openclaw.json), fall back to the generic model-based
-      // image description which resolves models via config fallback.
-      const describeImage = imageProvider?.describeImage ?? describeImageWithModel;
-      const describeImages = imageProvider?.describeImages ?? describeImagesWithModel;
-
-      if (params.images.length > 1 && describeImages) {
+      if (
+        params.images.length > 1 &&
+        (imageProvider?.describeImages || !imageProvider?.describeImage)
+      ) {
+        const describeImages = imageProvider?.describeImages ?? describeImagesWithModel;
         const described = await describeImages({
           images: params.images.map((image, index) => ({
             buffer: image.buffer,
@@ -192,6 +189,7 @@ async function runImagePrompt(params: {
         });
         return { text: described.text, provider, model: described.model ?? modelId };
       }
+      const describeImage = imageProvider?.describeImage ?? describeImageWithModel;
       if (params.images.length === 1) {
         const image = params.images[0];
         const described = await describeImage({
