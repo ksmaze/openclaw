@@ -191,13 +191,15 @@ describe("describeImageWithModel", () => {
   });
 
   it("passes image prompt as system instructions for codex image requests", async () => {
-    discoverModelsMock.mockReturnValue({
-      find: vi.fn(() => ({
+    resolveModelMock.mockReturnValue({
+      model: {
         provider: "openai-codex",
         id: "gpt-5.4",
         input: ["text", "image"],
         baseUrl: "https://chatgpt.com/backend-api",
-      })),
+      },
+      authStorage: { setRuntimeApiKey: setRuntimeApiKeyMock },
+      modelRegistry: {},
     });
     completeMock.mockResolvedValue({
       role: "assistant",
