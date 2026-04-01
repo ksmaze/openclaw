@@ -90,9 +90,11 @@ describe("live model switch", () => {
     });
   });
 
-  it("falls back to persisted runtime model fields when override fields are absent", async () => {
+  it("prefers persisted runtime model fields ahead of session overrides", async () => {
     state.loadSessionStoreMock.mockReturnValue({
-      "agent:main:cron:test": {
+      main: {
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
         modelProvider: "anthropic",
         model: "claude-sonnet-4-6",
       },
@@ -103,10 +105,10 @@ describe("live model switch", () => {
     expect(
       resolveLiveSessionModelSelection({
         cfg: { session: { store: "/tmp/custom-store.json" } },
-        sessionKey: "agent:main:cron:test",
-        agentId: "main",
-        defaultProvider: "anthropic",
-        defaultModel: "claude-opus-4-6",
+        sessionKey: "main",
+        agentId: "reply",
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
       }),
     ).toEqual({
       provider: "anthropic",
@@ -148,6 +150,23 @@ describe("live model switch", () => {
         {
           provider: "openai",
           model: "gpt-5.4",
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("does not track persisted live selection when the run started on a transient model override", async () => {
+    const { shouldTrackPersistedLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      shouldTrackPersistedLiveSessionModelSelection(
+        {
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+        },
+        {
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
         },
       ),
     ).toBe(false);

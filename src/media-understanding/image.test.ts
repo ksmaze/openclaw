@@ -37,7 +37,8 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   };
 });
 
-vi.mock("../agents/models-config.js", () => ({
+vi.mock("../agents/models-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/models-config.js")>()),
   ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
 }));
 
@@ -55,7 +56,7 @@ vi.mock("../agents/pi-embedded-runner/model.js", async (importOriginal) => {
   };
 });
 
-let describeImageWithModel: typeof import("./image.js").describeImageWithModel;
+const { describeImageWithModel } = await import("./image.js");
 
 describe("describeImageWithModel", () => {
   afterEach(() => {
@@ -63,32 +64,8 @@ describe("describeImageWithModel", () => {
     vi.restoreAllMocks();
   });
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
-    vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
-      return {
-        ...actual,
-        complete: completeMock,
-      };
-    });
-    vi.doMock("../agents/models-config.js", () => ({
-      ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
-    }));
-    vi.doMock("../agents/model-auth.js", () => ({
-      getApiKeyForModel: getApiKeyForModelMock,
-      resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-      requireApiKey: requireApiKeyMock,
-    }));
-    vi.doMock("../agents/pi-embedded-runner/model.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("../agents/pi-embedded-runner/model.js")>();
-      return {
-        ...actual,
-        resolveModel: resolveModelMock,
-      };
-    });
-    ({ describeImageWithModel } = await import("./image.js"));
     vi.clearAllMocks();
     fetchMock.mockResolvedValue({
       ok: true,
