@@ -1,4 +1,5 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import { diagnosticLogger } from "../logging/diagnostic.js";
 import { defaultRuntime } from "../runtime.js";
@@ -158,7 +159,9 @@ export function createSubagentRegistryLifecycleController(params: {
       return false;
     }
     try {
-      const captured = await params.captureSubagentCompletionReply(entry.childSessionKey);
+      const captured = await params.captureSubagentCompletionReply(entry.childSessionKey, {
+        waitForReply: entry.expectsCompletionMessage === true,
+      });
       entry.frozenResultText = captured?.trim() ? capFrozenResultText(captured) : null;
     } catch {
       entry.frozenResultText = null;
@@ -629,6 +632,12 @@ export function createSubagentRegistryLifecycleController(params: {
     if (!completeParams.triggerCleanup || suppressedForSteerRestart) {
       return;
     }
+
+    await cleanupBrowserSessionsForLifecycleEnd({
+      sessionKeys: [entry.childSessionKey],
+      onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
+    });
+
     startSubagentAnnounceCleanupFlow(completeParams.runId, entry);
   };
 
