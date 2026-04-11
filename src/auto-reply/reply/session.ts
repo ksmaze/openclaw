@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
+import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 import { disposeSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -33,6 +34,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/types.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -476,10 +478,12 @@ export async function initSessionState(params: {
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
   // Track the originating channel/to for announce routing (subagent announce-back).
   const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
+  const isInterSession = isInterSessionInputProvenance(ctx.InputProvenance);
   const lastChannelRaw = resolveLastChannelRaw({
     originatingChannelRaw,
     persistedLastChannel: baseEntry?.lastChannel,
     sessionKey,
+    isInterSession,
   });
   const lastToRaw = resolveLastToRaw({
     originatingChannelRaw,
@@ -488,6 +492,7 @@ export async function initSessionState(params: {
     persistedLastTo: baseEntry?.lastTo,
     persistedLastChannel: baseEntry?.lastChannel,
     sessionKey,
+    isInterSession,
   });
   const lastAccountIdRaw = resolveSessionDefaultAccountId({
     cfg,
@@ -695,6 +700,12 @@ export async function initSessionState(params: {
           error: String(error),
         },
       );
+    });
+    await resetRegisteredAgentHarnessSessions({
+      sessionId: previousSessionEntry.sessionId,
+      sessionKey,
+      sessionFile: previousSessionEntry.sessionFile,
+      reason: previousSessionEndReason ?? "unknown",
     });
   }
 

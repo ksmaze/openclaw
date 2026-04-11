@@ -237,6 +237,7 @@ export function createSubagentRunManager(params: {
         : undefined,
       cleanupCompletedAt: undefined,
       cleanupHandled: false,
+      completionAnnouncedAt: undefined,
       suppressAnnounceReason: undefined,
       announceRetryCount: undefined,
       lastAnnounceRetryAt: undefined,
@@ -248,9 +249,8 @@ export function createSubagentRunManager(params: {
     params.runs.set(nextRunId, next);
     params.ensureListener();
     params.persist();
-    if (archiveAtMs) {
-      params.startSweeper();
-    }
+    // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
+    params.startSweeper();
     void waitForSubagentCompletion(nextRunId, waitTimeoutMs);
     return true;
   };
@@ -275,6 +275,13 @@ export function createSubagentRunManager(params: {
     attachmentsRootDir?: string;
     retainAttachmentsOnKeep?: boolean;
   }) => {
+    const runId = registerParams.runId.trim();
+    const childSessionKey = registerParams.childSessionKey.trim();
+    const requesterSessionKey = registerParams.requesterSessionKey.trim();
+    const controllerSessionKey = registerParams.controllerSessionKey?.trim() || requesterSessionKey;
+    if (!runId || !childSessionKey || !requesterSessionKey) {
+      return;
+    }
     const now = Date.now();
     const cfg = params.loadConfig();
     const archiveAfterMs = resolveArchiveAfterMs(cfg);
@@ -288,12 +295,11 @@ export function createSubagentRunManager(params: {
     const runTimeoutSeconds = registerParams.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const requesterOrigin = normalizeDeliveryContext(registerParams.requesterOrigin);
-    params.runs.set(registerParams.runId, {
-      runId: registerParams.runId,
-      childSessionKey: registerParams.childSessionKey,
-      controllerSessionKey:
-        registerParams.controllerSessionKey ?? registerParams.requesterSessionKey,
-      requesterSessionKey: registerParams.requesterSessionKey,
+    params.runs.set(runId, {
+      runId,
+      childSessionKey,
+      controllerSessionKey,
+      requesterSessionKey,
       requesterOrigin,
       requesterDisplayKey: registerParams.requesterDisplayKey,
       task: registerParams.task,
@@ -310,6 +316,7 @@ export function createSubagentRunManager(params: {
       accumulatedRuntimeMs: 0,
       archiveAtMs,
       cleanupHandled: false,
+      completionAnnouncedAt: undefined,
       wakeOnDescendantSettle: undefined,
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
@@ -318,12 +325,12 @@ export function createSubagentRunManager(params: {
     try {
       createRunningTaskRun({
         runtime: "subagent",
-        sourceId: registerParams.runId,
-        ownerKey: registerParams.requesterSessionKey,
+        sourceId: runId,
+        ownerKey: requesterSessionKey,
         scopeKind: "session",
         requesterOrigin,
-        childSessionKey: registerParams.childSessionKey,
-        runId: registerParams.runId,
+        childSessionKey,
+        runId,
         label: registerParams.label,
         task: registerParams.task,
         deliveryStatus:
@@ -339,12 +346,11 @@ export function createSubagentRunManager(params: {
     }
     params.ensureListener();
     params.persist();
-    if (archiveAtMs) {
-      params.startSweeper();
-    }
+    // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
+    params.startSweeper();
     // Wait for subagent completion via gateway RPC (cross-process).
     // The in-process lifecycle listener is a fallback for embedded runs.
-    void waitForSubagentCompletion(registerParams.runId, waitTimeoutMs);
+    void waitForSubagentCompletion(runId, waitTimeoutMs);
   };
 
   const releaseSubagentRun = (runId: string) => {
