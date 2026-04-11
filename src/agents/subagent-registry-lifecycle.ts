@@ -493,7 +493,7 @@ export function createSubagentRegistryLifecycleController(params: {
       if (!beginSubagentCleanup(runId)) {
         return false;
       }
-      void finalizeSubagentCleanup(runId, entry.cleanup, true, {
+      void finalizeSubagentCleanup(runId, entry.cleanup, true, undefined, {
         skipAnnounce: true,
       }).catch((err) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
@@ -544,8 +544,8 @@ export function createSubagentRegistryLifecycleController(params: {
         spawnMode: entry.spawnMode,
         expectsCompletionMessage: entry.expectsCompletionMessage,
         announceTarget: entry.announceTarget,
-      wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
-    })
+        wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
+      })
       .then((result) => {
         const bailedForDescendants = result === "deferred-descendants";
         finalizeAnnounceCleanup(bailedForDescendants ? false : !!result, bailedForDescendants);
